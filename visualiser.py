@@ -103,3 +103,4 @@ def visualise_game_state(game_state, actions):
     plt.legend(handles=legend_patches, loc=(1.04, 0.5))
     plt.title('Game State')
     plt.show()
+    
