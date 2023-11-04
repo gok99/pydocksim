@@ -1,20 +1,15 @@
 import math
 from enum import Enum
 from dataclasses import dataclass
+from visualiser import visualise_game_state
+from visualiser import Action
 
-# actions: 
+# actions import from visualiser: 
 # F = forward L meters
 # B = backward L meters
 # R = move right L meters
 # L = move left L meters
 # Encircle(p, d) = encircle point p in d direction
-
-class Action(Enum):
-    F = 0
-    B = 1
-    R = 2
-    L = 3
-    Encircle = 4
 
 class Direction(Enum):
     CW = 0
@@ -204,6 +199,10 @@ def main():
     print(state)
     print(reward(state, game_state))
 
+    # actions should be appended to a list according to planner
+    dummy_actions = [Action.R, Action.R, Action.R, Action.R, Action.R, Action.R, Action.R, Action.Encircle, game_state.P, Action.F, Action.F, Action.F, Action.F, Action.F, Action.F, Action.Encircle, game_state.T]
+
+    visualise_game_state(game_state, dummy_actions)
 
 if __name__ == "__main__":
     main()
