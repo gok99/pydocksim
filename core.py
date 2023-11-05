@@ -3,6 +3,7 @@ from enum import Enum
 from dataclasses import dataclass
 from visualiser import visualise_game_state
 from visualiser import Action
+import numpy as np
 
 # actions import from visualiser: 
 # F = forward L meters
@@ -31,6 +32,7 @@ class GameState:
     move_time: float   # time to move 1 grid length
     circle_time: float # time to encircle 1m
     time_limit: float  # time limit for episode
+    time: float        # time elapsed so far
 
 @dataclass
 class State:
@@ -46,20 +48,21 @@ class State:
 # +30 for encircling turtle   (if not collided with animal)
 # +30 for staying > 10m away from crocodile (at the end of the episode)
 
-def reward(usv_state: State, game_state: GameState):
+def pseudo_vrx_score(x, y, ae, game_state: GameState):
     reward = 0
-    reward -= usv_state.time
+    reward -= game_state.time
+    P, T, C = get_animal_decoding(ae)
     
-    if usv_state.P:
+    if P:
         reward += 30
-    if usv_state.T:
+    if T:
         reward += 30
     
-    time_exceeded = usv_state.time >= game_state.time_limit
-    game_over = (usv_state.P and usv_state.T) or time_exceeded
+    time_exceeded = (x + y) >= game_state.time_limit
+    game_over = (P and T) or time_exceeded
     
-    if game_over and usv_state.C:
-            reward += 30
+    if game_over and C:
+        reward += 30
     
     return reward
 
@@ -67,24 +70,23 @@ def reward(usv_state: State, game_state: GameState):
 #  y
 #  |
 #  ---> x
-
-def will_collide(usv_state: State, game_state: GameState, action: Action, pc: tuple = None):
+def will_collide(x, y, game_state: GameState, action: Action, pc: tuple = None):
     # 
     # radius = inner_radius = outer_radius = bottom_y = top_y = left_x = right_x = 0
 
     def encircle_movement_check():
-        radius = math.sqrt((usv_state.pos[0] - pc[0])**2 + (usv_state.pos[1] - pc[1])**2)
+        radius = math.sqrt((x - pc[0])**2 + (y - pc[1])**2)
         inner_radius = radius - game_state.usv_dims[1]/2
-        outer_radius = radius + game_state.usv_dims[1]/2
+        outer_radius = radius + game_state.usv_dims[1]/ 2
 
         return lambda animal_pos : \
             inner_radius <= math.sqrt((animal_pos[0] - pc[0])**2 + (animal_pos[1] - pc[1])**2) <= outer_radius
 
     def pos_movement_check():  
-        bottom_y = usv_state.pos[1] - game_state.usv_dims[1]/2
-        top_y = usv_state.pos[1] + game_state.usv_dims[1]/2
-        left_x = usv_state.pos[0] - game_state.usv_dims[0]/2
-        right_x = usv_state.pos[0] + game_state.usv_dims[0]/2
+        bottom_y = y - game_state.usv_dims[1]/2
+        top_y = y + game_state.usv_dims[1]/2
+        left_x = x - game_state.usv_dims[0]/2
+        right_x = x + game_state.usv_dims[0]/2
 
         if action == Action.F:
             top_y += game_state.grid_length
@@ -109,52 +111,121 @@ def will_collide(usv_state: State, game_state: GameState, action: Action, pc: tu
             return True
 
 def position_encircled(usv_pos: tuple, circle_pos: tuple, test_pos: tuple):
-    radius = math.sqrt((usv_pos[0] - circle_pos[0])**2 + (usv_pos[1] - circle_pos[1])**2)
-    return math.sqrt((test_pos[0] - circle_pos[0])**2 + (test_pos[1] - circle_pos[1])**2) <= radius
+    radius = (usv_pos[0] - circle_pos[0])**2 + (usv_pos[1] - circle_pos[1])**2
+    return (test_pos[0] - circle_pos[0])**2 + (test_pos[1] - circle_pos[1])**2 <= radius
 
-def run_action(usv_state: State, game_state: GameState, action: Action, pc: tuple = None, dir: Direction = None):
-    new_usv_state = State(
-        pos = usv_state.pos,
-        P = usv_state.P,
-        T = usv_state.T,
-        C = usv_state.C,
-        time = usv_state.time
-    )
-    
-    if will_collide(usv_state, game_state, action, pc):
-        # TODO: figure out what to do with collisions
-        return new_usv_state
+def get_animal_encoding(P: bool, T: bool, C: bool):
+    pv = 1 if P else 0
+    tv = 1 if T else 0
+    cv = 1 if C else 0
+    return pv * 4 + tv * 2 + cv
+
+def get_animal_decoding(encoding: int):
+    P = encoding // 4 == 1
+    encoding %= 4
+    T = encoding // 2 == 1
+    encoding %= 2
+    C = encoding == 1
+    return (P, T, C)
+
+def next_state(x, y, ae, a, gs: GameState):
+    new_x, new_y = x, y
+    action, pc, dir = a
+    new_P, new_T, new_C = get_animal_decoding(ae)
 
     if action == Action.Encircle:
-        assert pc is not None and dir is not None, "Must specify pc and dir for Encircle action"
+        if position_encircled((x, y), pc, gs.P) and dir == Direction.CW:
+            new_P = True
+        
+        if position_encircled((x, y), pc, gs.T) and dir == Direction.CCW:
+            new_T = True
 
-        if dir == Direction.CW:
-            plat_circled = position_encircled(usv_state.pos, pc, game_state.P)
-            new_usv_state.P = new_usv_state.P or plat_circled
-        elif dir == Direction.CCW:
-            turtle_circled = position_encircled(usv_state.pos, pc, game_state.T)
-            new_usv_state.T = new_usv_state.T or turtle_circled
-
-        twopiR = 2 * math.pi * math.sqrt((usv_state.pos[0] - pc[0])**2 + (usv_state.pos[1] - pc[1])**2)
-        new_usv_state.time += twopiR * game_state.circle_time
-    
-    # update position
+        pc_to_croc = math.sqrt((pc[0] - gs.C[0])**2 + (pc[1] - gs.C[1])**2)
+        pc_to_usv = math.sqrt((pc[0] - x)**2 + (pc[1] - y)**2)
+        if pc_to_croc - pc_to_usv < 10:
+            new_C = False
     else:
-        new_usv_state.time += game_state.move_time
         if action == Action.F:
-            new_usv_state.pos = (usv_state.pos[0], usv_state.pos[1] + game_state.grid_length)
+            new_y += gs.grid_length
         elif action == Action.B:
-            new_usv_state.pos = (usv_state.pos[0], usv_state.pos[1] - game_state.grid_length)
+            new_y -= gs.grid_length
         elif action == Action.R:
-            new_usv_state.pos = (usv_state.pos[0] + game_state.grid_length, usv_state.pos[1])
+            new_x += gs.grid_length
         elif action == Action.L:
-            new_usv_state.pos = (usv_state.pos[0] - game_state.grid_length, usv_state.pos[1])
+            new_x -= gs.grid_length
 
-    # TODO: use whole path, not just end point
-    new_usv_state.C = new_usv_state.C and \
-        math.sqrt((new_usv_state.pos[0] - game_state.C[0])**2 + (new_usv_state.pos[1] - game_state.C[1])**2) > 10
+        usv_to_croc = (new_x - gs.C[0])**2 + (new_y - gs.C[1])**2
+        if usv_to_croc < 100:
+            new_C = False
+    
+    return (new_x, new_y, get_animal_encoding(new_P, new_T, new_C))
 
-    return new_usv_state
+# does not perform validation. only use actions from available_actions
+def reward(x, y, ae, a, gs: GameState):
+    delta_reward = 0
+    
+    action, pc, _ = a
+    P, T, C = get_animal_decoding(ae)
+
+    new_x, new_y, ae = next_state(x, y, ae, a, gs)
+    new_P, new_T, new_C = get_animal_decoding(ae)
+
+    if action == Action.F or action == Action.B or action == Action.R or action == Action.L:
+        delta_reward -= gs.move_time
+    else: 
+        # action is encircle
+        twopir = 2 * math.pi * math.sqrt((x - pc[0])**2 + (y - pc[1])**2)
+        delta_reward -= twopir * gs.circle_time
+    
+    if new_P and not P:
+        delta_reward += 30
+    
+    if new_T and not T:
+        delta_reward += 30
+
+    if new_P and new_T:
+        delta_reward += 0
+
+    if not new_C and C:
+        delta_reward -= 30
+    
+    return (delta_reward, (new_x, new_y, ae))
+
+def available_actions(x, y, game_state: GameState, lb, rb, bb, tb):
+    actions = []
+    curr_pos = (x, y)
+    def in_bounds(x, y):
+        return lb <= x <= rb and bb <= y <= tb
+
+    # check if moving is possible
+    if not will_collide(x, y, game_state, Action.F):
+        x = curr_pos[0]
+        y = curr_pos[1] + game_state.grid_length
+        if in_bounds(x, y):
+            actions.append((Action.F, None, None))
+    if not will_collide(x, y, game_state, Action.B):
+        x = curr_pos[0]
+        y = curr_pos[1] - game_state.grid_length
+        if in_bounds(x, y):
+            actions.append((Action.B, None, None))
+    if not will_collide(x, y, game_state, Action.R):
+        x = curr_pos[0] + game_state.grid_length
+        y = curr_pos[1]
+        if in_bounds(x, y):
+            actions.append((Action.R, None, None))
+    if not will_collide(x, y, game_state, Action.L):
+        x = curr_pos[0] - game_state.grid_length
+        y = curr_pos[1]
+        if in_bounds(x, y):
+            actions.append((Action.L, None, None))
+    if not will_collide(x, y, game_state, Action.Encircle, game_state.P):
+        actions.append((Action.Encircle, game_state.P, Direction.CW))
+        actions.append((Action.Encircle, game_state.P, Direction.CCW))
+    if not will_collide(x, y, game_state, Action.Encircle, game_state.T):
+        actions.append((Action.Encircle, game_state.T, Direction.CW))
+        actions.append((Action.Encircle, game_state.T, Direction.CCW))
+    
+    return actions
 
 def main():
     game_state = GameState(
@@ -166,43 +237,100 @@ def main():
         grid_length = 1,
         time_limit = 100,
         move_time = 1,
-        circle_time = 1
-    )
-    state = State(
-        pos = game_state.start_pos,
-        P = False,
-        T = False,
-        C = True,
+        circle_time = 1,
         time = 0
     )
-    print(game_state)
-    print(state)
-    print(reward(state, game_state))
-    state = run_action(state, game_state, Action.R)
-    state = run_action(state, game_state, Action.R)
-    state = run_action(state, game_state, Action.R)
-    state = run_action(state, game_state, Action.R)
-    state = run_action(state, game_state, Action.R)
-    state = run_action(state, game_state, Action.R)
-    state = run_action(state, game_state, Action.R)
-
-    print(state)
-    print(reward(state, game_state))
-    state = run_action(state, game_state, Action.Encircle, pc = game_state.P, dir = Direction.CW)
-    print(state)
-    print(reward(state, game_state))
-    state = run_action(state, game_state, Action.L)
-    state = run_action(state, game_state, Action.L)
-    state = run_action(state, game_state, Action.L)
-    state = run_action(state, game_state, Action.L)
-    
-    print(state)
-    print(reward(state, game_state))
 
     # actions should be appended to a list according to planner
-    dummy_actions = [Action.R, Action.R, Action.R, Action.R, Action.R, Action.R, Action.R, Action.Encircle, game_state.P, Action.F, Action.F, Action.F, Action.F, Action.F, Action.F, Action.Encircle, game_state.T]
+    left_bound = int(min(0, game_state.P[0], game_state.T[0], game_state.C[0])) - 2
+    right_bound = int(max(0, game_state.P[0], game_state.T[0], game_state.C[0])) + 2
 
-    visualise_game_state(game_state, dummy_actions)
+    bottom_bound = int(min(0, game_state.P[1], game_state.T[1], game_state.C[1])) - 2
+    top_bound = int(max(0, game_state.P[1], game_state.T[1], game_state.C[1])) + 2
+
+    def idx(x):
+        return (x - left_bound) // game_state.grid_length
+    
+    def idy(y):
+        return (y - bottom_bound) // game_state.grid_length
+
+    print(left_bound, right_bound, bottom_bound, top_bound)
+
+    # precompute actions
+    pre_actions = {}
+    for x in range(left_bound, right_bound + 1, game_state.grid_length):
+        for y in range(bottom_bound, top_bound + 1, game_state.grid_length):
+            pre_actions[x, y] = available_actions(x, y, game_state, left_bound, right_bound, bottom_bound, top_bound)
+
+    WIDTH = len(range(left_bound, right_bound + 1, game_state.grid_length))
+    HEIGHT = len(range(bottom_bound, top_bound + 1, game_state.grid_length))
+
+    # perform value iteration
+    value_policy = np.zeros((WIDTH, HEIGHT, 8))
+
+    for x in range(left_bound, right_bound + 1, game_state.grid_length):
+        for y in range(bottom_bound, top_bound + 1, game_state.grid_length):
+            for s in range(8):
+                value_policy[idx(x)][idy(y)][s] = pseudo_vrx_score(x, y, s, game_state)
+
+    max_iter = 10000
+    gamma = 0.99
+
+    # value iteration
+    for i in range(max_iter):
+        delta = 0
+        for x in range(left_bound, right_bound + 1, game_state.grid_length):
+            for y in range(bottom_bound, top_bound + 1, game_state.grid_length):
+                for s in range(8):
+                    new_v = value_policy[idx(x)][idy(y)][s]
+                    actions = pre_actions[x, y]
+                    
+                    for a in actions:
+                        delta_reward, new_state = reward(x, y, s, a, game_state)
+                        new_v = max(new_v, delta_reward + gamma * value_policy[idx(new_state[0])][idy(new_state[1])][new_state[2]])
+                    
+                    delta = max(delta, abs(new_v - value_policy[idx(x)][idy(y)][s]))
+                    value_policy[idx(x)][idy(y)][s] = new_v
+        print (i, delta)
+        if delta < 0.01:
+            break
+
+    # policy extraction
+    actions = []
+    curr_state = (0, 1, get_animal_encoding(False, False, True))
+
+    count = 0
+
+    while curr_state[2] < 6 and count < 20:
+        x, y, ae = curr_state
+        pactions = pre_actions[x, y]
+
+        best_action = None
+        best_reward = -100000
+
+        for a in pactions:
+            new_x, new_y, new_ae = next_state(x, y, ae, a, game_state)
+            utility = value_policy[idx(new_x)][idy(new_y)][new_ae]
+            if utility > best_reward and (x, y, ae) != (new_x, new_y, new_ae):
+                best_action = a
+                best_reward = utility
+
+        if best_action is None:
+            break
+
+        if best_action[0] == Action.Encircle:
+            actions.append(best_action[0])
+            actions.append(best_action[1])
+        else:
+            actions.append(best_action[0])
+
+        curr_state = next_state(x, y, ae, best_action, game_state)
+        count += 1
+
+    print ()
+
+    print (actions)
+    visualise_game_state(game_state, actions)
 
 if __name__ == "__main__":
     main()
