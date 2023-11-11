@@ -5,6 +5,8 @@ from visualiser import visualise_game_state
 from visualiser import Action
 import numpy as np
 
+import matplotlib.pyplot as plt
+
 # actions import from visualiser: 
 # F = forward L meters
 # B = backward L meters
@@ -167,8 +169,8 @@ def reward(x, y, ae, a, gs: GameState):
     action, pc, _ = a
     P, T, C = get_animal_decoding(ae)
 
-    new_x, new_y, ae = next_state(x, y, ae, a, gs)
-    new_P, new_T, new_C = get_animal_decoding(ae)
+    new_x, new_y, new_ae = next_state(x, y, ae, a, gs)
+    new_P, new_T, new_C = get_animal_decoding(new_ae)
 
     if action == Action.F or action == Action.B or action == Action.R or action == Action.L:
         delta_reward -= gs.move_time
@@ -189,7 +191,7 @@ def reward(x, y, ae, a, gs: GameState):
     if not new_C and C:
         delta_reward -= 30
     
-    return (delta_reward, (new_x, new_y, ae))
+    return (delta_reward, (new_x, new_y, new_ae))
 
 def available_actions(x, y, game_state: GameState, lb, rb, bb, tb):
     actions = []
@@ -231,9 +233,9 @@ def main():
     game_state = GameState(
         start_pos = (0, 0),
         usv_dims = (1, 1),
-        P = (10, 0),
-        T = (0, 10),
-        C = (20, 20),
+        P = (0, 30),
+        T = (15, 15),
+        C = (0, 15),
         grid_length = 1,
         time_limit = 100,
         move_time = 1,
@@ -257,10 +259,9 @@ def main():
     print(left_bound, right_bound, bottom_bound, top_bound)
 
     # precompute actions
-    pre_actions = {}
-    for x in range(left_bound, right_bound + 1, game_state.grid_length):
-        for y in range(bottom_bound, top_bound + 1, game_state.grid_length):
-            pre_actions[x, y] = available_actions(x, y, game_state, left_bound, right_bound, bottom_bound, top_bound)
+    pre_actions = { (x, y) : available_actions(x, y, game_state, left_bound, right_bound, bottom_bound, top_bound) for 
+                    x in range(left_bound, right_bound + 1, game_state.grid_length) for
+                    y in range(bottom_bound, top_bound + 1, game_state.grid_length) }
 
     WIDTH = len(range(left_bound, right_bound + 1, game_state.grid_length))
     HEIGHT = len(range(bottom_bound, top_bound + 1, game_state.grid_length))
@@ -271,10 +272,10 @@ def main():
     for x in range(left_bound, right_bound + 1, game_state.grid_length):
         for y in range(bottom_bound, top_bound + 1, game_state.grid_length):
             for s in range(8):
-                value_policy[idx(x)][idy(y)][s] = pseudo_vrx_score(x, y, s, game_state)
+                value_policy[idx(x)][idy(y)][s] = 0 # pseudo_vrx_score(x, y, s, game_state)
 
     max_iter = 10000
-    gamma = 0.99
+    gamma = 1
 
     # value iteration
     for i in range(max_iter):
@@ -282,41 +283,71 @@ def main():
         for x in range(left_bound, right_bound + 1, game_state.grid_length):
             for y in range(bottom_bound, top_bound + 1, game_state.grid_length):
                 for s in range(8):
-                    new_v = value_policy[idx(x)][idy(y)][s]
+                    new_v = -10 # value_policy[idx(x)][idy(y)][s]
                     actions = pre_actions[x, y]
-                    
+
                     for a in actions:
                         delta_reward, new_state = reward(x, y, s, a, game_state)
                         new_v = max(new_v, delta_reward + gamma * value_policy[idx(new_state[0])][idy(new_state[1])][new_state[2]])
-                    
+                        # if (x, y, s) == (0, 9, 1):
+                        #     print (a, new_state, "inc: ", delta_reward, ", curr_max: ", new_v, ", adj state u: ", value_policy[idx(new_state[0])][idy(new_state[1])][new_state[2]])
+
+                    # if (x, y, s) == (0, 9, 1):
+                    #     print("=========================")
+    
                     delta = max(delta, abs(new_v - value_policy[idx(x)][idy(y)][s]))
                     value_policy[idx(x)][idy(y)][s] = new_v
         print (i, delta)
         if delta < 0.01:
             break
 
+    #####################
+    # Utility heatmap
+
+    utility_values = np.zeros((WIDTH, HEIGHT))
+
+    for x in range(value_policy.shape[0]):
+        for y in range(value_policy.shape[1]):
+            # Assume s=0 for simplicity. Change this if you have different states.
+            utility_values[x][y] = value_policy[x][y][3]
+
+    utility_values = np.transpose(utility_values)
+
+    # plt.imshow(utility_values, cmap='hot', interpolation='nearest', origin='lower')
+    # plt.colorbar(label='Utility values')
+    # plt.show()
+
+    #####################
+
+    print()
     # policy extraction
     actions = []
-    curr_state = (0, 1, get_animal_encoding(False, False, True))
-
+    curr_state = (0, 0, get_animal_encoding(False, False, True))
     count = 0
 
-    while curr_state[2] < 6 and count < 20:
+    while curr_state[2] < 6 and count < 100:
         x, y, ae = curr_state
         pactions = pre_actions[x, y]
 
         best_action = None
         best_reward = -100000
 
+        print (x, y, ae)
+
         for a in pactions:
-            new_x, new_y, new_ae = next_state(x, y, ae, a, game_state)
-            utility = value_policy[idx(new_x)][idy(new_y)][new_ae]
-            if utility > best_reward and (x, y, ae) != (new_x, new_y, new_ae):
+            rew, ns = reward(x, y, ae, a, game_state)
+            new_x, new_y, new_ae = ns
+            utility = rew + gamma * value_policy[idx(new_x)][idy(new_y)][new_ae]
+            # print (a, new_x, new_y, new_ae, utility)
+            if utility > best_reward:  # and (x, y, ae) != (new_x, new_y, new_ae):
                 best_action = a
                 best_reward = utility
 
         if best_action is None:
             break
+
+        print(best_action)
+        print("<<<<<<<<<<<<<<<<<<<<<<<<")
 
         if best_action[0] == Action.Encircle:
             actions.append(best_action[0])
