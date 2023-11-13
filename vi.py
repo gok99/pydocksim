@@ -286,14 +286,13 @@ def main():
                     new_v = -50 # value_policy[idx(x)][idy(y)][s]
                     actions = pre_actions[x, y]
 
+                    P, T, _ = get_animal_decoding(s)
+                    if P and T:
+                        continue
+
                     for a in actions:
                         delta_reward, new_state = reward(x, y, s, a, game_state)
                         new_v = max(new_v, delta_reward + gamma * value_policy[idx(new_state[0])][idy(new_state[1])][new_state[2]])
-                        # if (x, y, s) == (0, 9, 1):
-                        #     print (a, new_state, "inc: ", delta_reward, ", curr_max: ", new_v, ", adj state u: ", value_policy[idx(new_state[0])][idy(new_state[1])][new_state[2]])
-
-                    # if (x, y, s) == (0, 9, 1):
-                    #     print("=========================")
     
                     delta = max(delta, abs(new_v - value_policy[idx(x)][idy(y)][s]))
                     value_policy[idx(x)][idy(y)][s] = new_v
@@ -338,8 +337,7 @@ def main():
             rew, ns = reward(x, y, ae, a, game_state)
             new_x, new_y, new_ae = ns
             utility = rew + gamma * value_policy[idx(new_x)][idy(new_y)][new_ae]
-            # print (a, new_x, new_y, new_ae, utility)
-            if utility > best_reward:  # and (x, y, ae) != (new_x, new_y, new_ae):
+            if utility > best_reward:
                 best_action = a
                 best_reward = utility
 
