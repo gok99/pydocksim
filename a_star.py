@@ -296,19 +296,32 @@ def main():
     ## Treat the radius 10m of the crocodile as obstacles
 
 
-    animals_to_encircle = [(game_state.P,"platypus"), (game_state.T,"turtle")]
+    animals_to_encircle = []
     action_history = []
     time = 0
+    
+    plat_distance_to_croc = math.sqrt((game_state.C[0] - game_state.P[0])**2 + (game_state.C[1] - game_state.P[1])**2)
+    if plat_distance_to_croc >= 10:
+        animals_to_encircle.append((game_state.P,"platypus"))
+    else:
+        print("platypus is too close to crocodile, no path found")
+
+    turt_distance_to_croc = math.sqrt((game_state.C[0] - game_state.T[0])**2 + (game_state.C[1] - game_state.T[1])**2)
+    if turt_distance_to_croc >= 10:
+        animals_to_encircle.append((game_state.T,"turtle"))
+    else:
+        print("turtle is too close to crocodile, no path found")
+    
 
     while not (state.P and state.T):
         if len(animals_to_encircle) == 0:
             break
         possible_targets = []
         for animal in animals_to_encircle:
-            possible_targets.append(((animal[0][0]+3, animal[0][1]), animal[1]))
-            possible_targets.append(((animal[0][0]-3, animal[0][1]), animal[1]))
-            possible_targets.append(((animal[0][0], animal[0][1]+3), animal[1]))
-            possible_targets.append(((animal[0][0], animal[0][1]-3), animal[1]))
+            possible_targets.append(((animal[0][0]+2, animal[0][1]), animal[1]))
+            possible_targets.append(((animal[0][0]-2, animal[0][1]), animal[1]))
+            possible_targets.append(((animal[0][0], animal[0][1]+2), animal[1]))
+            possible_targets.append(((animal[0][0], animal[0][1]-2), animal[1]))
             print(possible_targets)
 
         best = possible_targets[0]
