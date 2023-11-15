@@ -49,67 +49,24 @@ class State:
 # +30 for encircling platypus (if not collided with animal)
 # +30 for encircling turtle   (if not collided with animal)
 # +30 for staying > 10m away from crocodile (at the end of the episode)
-def pseudo_vrx_score(x, y, ae, time, game_state: GameState):
-    reward = 0
-    print (time)
 
+def pseudo_vrx_score(x, y, ae, game_state: GameState):
+    reward = 0
+    reward -= game_state.time
     P, T, C = get_animal_decoding(ae)
     
     if P:
         reward += 30
-        print ("bonus P")
     if T:
         reward += 30
-        print ("bonus T")
     
-    time_exceeded = time >= game_state.time_limit
+    time_exceeded = (x + y) >= game_state.time_limit
     game_over = (P and T) or time_exceeded
     
     if game_over and C:
         reward += 30
-        print ("bonus C")
-
-    if not game_over:
-        reward -= 100
-    else:
-        reward -= time
     
     return reward
-
-def score_solution(actions, game_state: GameState):
-    total_time = 0
-    P, T, C = False, False, True
-    x, y = game_state.start_pos
-    for a in actions:
-        if a == Action.F:
-            y += game_state.grid_length
-            total_time += game_state.move_time
-        elif a == Action.B:
-            y -= game_state.grid_length
-            total_time += game_state.move_time
-        elif a == Action.R:
-            x += game_state.grid_length
-            total_time += game_state.move_time
-        elif a == Action.L:
-            x -= game_state.grid_length
-            total_time += game_state.move_time
-        elif a == Action.Encircle:
-            continue
-        else:
-            # encircle
-            cx, cy = a
-            twopir = 2 * math.pi * math.sqrt((x - cx)**2 + (y - cy)**2)
-            total_time += twopir * game_state.circle_time
-            if (cx, cy) == game_state.P:
-                P = True
-            elif (cx, cy) == game_state.T:
-                T = True
-
-        dist_to_croc = math.sqrt((x - game_state.C[0])**2 + (y - game_state.C[1])**2)
-        if dist_to_croc < 10:
-            C = False
-    
-    return pseudo_vrx_score(x, y, get_animal_encoding(P, T, C), total_time, game_state)
 
 # coord convention:
 #  y
@@ -216,7 +173,7 @@ def reward(x, y, ae, a, gs: GameState):
     new_P, new_T, new_C = get_animal_decoding(new_ae)
 
     if action == Action.F or action == Action.B or action == Action.R or action == Action.L:
-        delta_reward -= gs.move_time * 0.2
+        delta_reward -= gs.move_time * 0.8
     else: 
         # action is encircle
         twopir = 2 * math.pi * math.sqrt((x - pc[0])**2 + (y - pc[1])**2)
@@ -270,44 +227,9 @@ def available_actions(x, y, game_state: GameState, lb, rb, bb, tb):
         actions.append((Action.Encircle, game_state.T, Direction.CW))
         actions.append((Action.Encircle, game_state.T, Direction.CCW))
     
-    return actions        
+    return actions
 
-def main():
-    game_state = GameState(
-        start_pos = (0, 0),
-        usv_dims = (1, 1),
-        # case 1
-        P = (0, 10),
-        T = (10, 0),
-        C = (15, 15),
-
-        # case 2
-        # P = (0, 30),
-        # T = (15, 15),
-        # C = (0, 15),
-
-        # case 3
-        # P = (39, 39),
-        # T = (10, 10),
-        # C = (30, 30),
-
-        # case 4
-        # P = (-7, 15),
-        # T = (15, 15),
-        # C = (0, 15), 
-
-        # case 5
-        # P = (-7, 15),
-        # T = (7, 15),
-        # C = (0, 15),
-
-        grid_length = 1,
-        time_limit = 100,
-        move_time = 1,
-        circle_time = 1,
-        time = 0
-    )
-
+def get_vi_utilities(game_state: GameState):
     # actions should be appended to a list according to planner
     left_bound = int(min(0, game_state.P[0], game_state.T[0], game_state.C[0])) - 2
     right_bound = int(max(0, game_state.P[0], game_state.T[0], game_state.C[0])) + 2
@@ -364,6 +286,149 @@ def main():
         print (i, delta)
         if delta < 0.01:
             break
+    
+    return value_policy
+
+
+def main():
+    game_states = [GameState(
+        start_pos = (0, 0),
+        usv_dims = (1, 1),
+        P = (0, 10),
+        T = (10, 0),
+        C = (15, 15),
+        grid_length = 1,
+        time_limit = 100,
+        move_time = 1,
+        circle_time = 1,
+        time = 0)
+    # ), GameState(
+    #     start_pos = (0, 0),
+    #     usv_dims = (1, 1),
+    #     P = (39, 39),
+    #     T = (10, 10),
+    #     C = (30, 30),
+    #     grid_length = 1,
+    #     time_limit = 100,
+    #     move_time = 1,
+    #     circle_time = 1,
+    #     time = 0
+    # ), GameState(
+    #     start_pos = (0, 0),
+    #     usv_dims = (1, 1),
+    #     P = (20, 20),
+    #     T = (10, 10),
+    #     C = (-20, 0),
+    #     grid_length = 1,
+    #     time_limit = 100,
+    #     move_time = 1,
+    #     circle_time = 1,
+    #     time = 0
+    # )]
+    ]
+
+    #####################
+    ## U estimation with NN
+    
+    import torch
+    from torch import nn
+    from torch.optim import Adam
+
+    # Step 1: Prepare data
+    X = []
+    Y = []
+
+    for game_state in game_states:
+        left_bound = int(min(0, game_state.P[0], game_state.T[0], game_state.C[0])) - 2
+        right_bound = int(max(0, game_state.P[0], game_state.T[0], game_state.C[0])) + 2
+        bottom_bound = int(min(0, game_state.P[1], game_state.T[1], game_state.C[1])) - 2
+        top_bound = int(max(0, game_state.P[1], game_state.T[1], game_state.C[1])) + 2
+
+        def idx(x):
+            return (x - left_bound) // game_state.grid_length
+    
+        def idy(y):
+            return (y - bottom_bound) // game_state.grid_length
+
+        P = game_state.P
+        T = game_state.T
+        C = game_state.C
+
+        value_policy = get_vi_utilities(game_state)
+
+        for x in range(left_bound, right_bound + 1, game_state.grid_length):
+            for y in range(bottom_bound, top_bound + 1, game_state.grid_length):
+                for ae in range(8):
+                    X.append([x, y, P[0], P[1], T[0], T[1], C[0], C[1], ae])
+                    Y.append(value_policy[idx(x)][idy(y)][ae])
+
+    X = torch.tensor(X, dtype=torch.float32)
+    Y = torch.tensor(Y, dtype=torch.float32).unsqueeze(1)
+
+    # Step 2: Define model
+    model = nn.Sequential(
+        nn.Linear(9, 10),
+        nn.ReLU(),
+        nn.Linear(10, 10),
+        nn.ReLU(),
+        nn.Linear(10, 10),
+        nn.ReLU(),
+        nn.Linear(10, 1)
+    )
+
+    # Step 3: Train
+    optimizer = Adam(model.parameters(), lr=0.001)
+    loss_fn = nn.MSELoss()
+
+    for epoch in range(10000):  # Adjust as needed
+        optimizer.zero_grad()
+        predictions = model(X)
+        loss = loss_fn(predictions, Y)
+        loss.backward()
+        optimizer.step()
+
+        if epoch % 100 == 0:
+            print(f"Epoch: {epoch}, Loss: {loss.item()}")
+
+    #####################
+    game_state = game_states[-1]
+    
+    left_bound = int(min(0, game_state.P[0], game_state.T[0], game_state.C[0])) - 2
+    right_bound = int(max(0, game_state.P[0], game_state.T[0], game_state.C[0])) + 2
+
+    bottom_bound = int(min(0, game_state.P[1], game_state.T[1], game_state.C[1])) - 2
+    top_bound = int(max(0, game_state.P[1], game_state.T[1], game_state.C[1])) + 2
+
+    P = game_state.P
+    T = game_state.T
+    C = game_state.C
+
+    test_X = [[x, y, P[0], P[1], T[0], T[1], C[0], C[1], ae] for x in range(left_bound, right_bound + 1, game_state.grid_length) for y in range(bottom_bound, top_bound + 1, game_state.grid_length) for ae in range(8)]
+    test_X = torch.tensor(test_X, dtype=torch.float32)
+
+    # Make sure the model is in evaluation mode
+    model.eval()
+
+    # Get predictions
+    with torch.no_grad():
+        test_predictions = model(test_X)
+
+    # Convert predictions to numpy array
+    test_predictions = test_predictions.numpy()
+
+    print(test_predictions.shape)
+
+    WIDTH = len(range(left_bound, right_bound + 1, game_state.grid_length))
+    HEIGHT = len(range(bottom_bound, top_bound + 1, game_state.grid_length))
+
+    value_policy = np.zeros((WIDTH, HEIGHT, 8))
+
+    i = 0
+    for x in range(value_policy.shape[0]):
+        for y in range(value_policy.shape[1]):
+            for s in range(8):
+                value_policy[x][y][s] = test_predictions[i]
+                i += 1
 
     #####################
     # Utility heatmap
@@ -383,11 +448,13 @@ def main():
 
     #####################
 
-    print()
-    # policy extraction
     actions = []
     curr_state = (0, 0, get_animal_encoding(False, False, True))
     count = 0
+
+    pre_actions = { (x, y) : available_actions(x, y, game_state, left_bound, right_bound, bottom_bound, top_bound) for 
+                x in range(left_bound, right_bound + 1, game_state.grid_length) for
+                y in range(bottom_bound, top_bound + 1, game_state.grid_length) }
 
     while curr_state[2] < 6 and count < 100:
         x, y, ae = curr_state
@@ -398,13 +465,30 @@ def main():
 
         print (x, y, ae)
 
-        for a in pactions:
-            rew, ns = reward(x, y, ae, a, game_state)
-            new_x, new_y, new_ae = ns
-            utility = rew + gamma * value_policy[idx(new_x)][idy(new_y)][new_ae]
-            if utility > best_reward:
-                best_action = a
-                best_reward = utility
+        P, T, _ = get_animal_decoding(ae)
+        best_action_found = False
+        CUTOFF = 3
+
+        new_dist_to_plat = math.sqrt((x - game_state.P[0])**2 + (y - game_state.P[1])**2)
+        new_dist_to_turt = math.sqrt((x - game_state.T[0])**2 + (y - game_state.T[1])**2)
+
+        if new_dist_to_plat <= CUTOFF and not P:
+            best_action = (Action.Encircle, game_state.P, Direction.CW)
+            best_action_found = True
+                
+        if new_dist_to_turt <= CUTOFF and not T:
+            best_action = (Action.Encircle, game_state.T, Direction.CCW)
+            best_action_found = True
+
+        if not best_action_found:
+            for a in pactions:
+                rew, ns = reward(x, y, ae, a, game_state)
+                new_x, new_y, new_ae = ns
+                utility = rew + value_policy[idx(new_x)][idy(new_y)][new_ae]
+            
+                if utility > best_reward:
+                    best_action = a
+                    best_reward = utility
 
         if best_action is None:
             break
@@ -421,10 +505,9 @@ def main():
         curr_state = next_state(x, y, ae, best_action, game_state)
         count += 1
 
-    print ()
+    # print ()
 
     print (actions)
-    print (score_solution(actions, game_state))
     visualise_game_state(game_state, actions)
 
 if __name__ == "__main__":

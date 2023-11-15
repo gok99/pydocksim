@@ -41,28 +41,82 @@ class State:
     C: bool          # True if > 10m away so far
     time: float      # time elapsed so far
 
+def get_animal_encoding(P: bool, T: bool, C: bool):
+    pv = 1 if P else 0
+    tv = 1 if T else 0
+    cv = 1 if C else 0
+    return pv * 4 + tv * 2 + cv
+
+def get_animal_decoding(encoding: int):
+    P = encoding // 4 == 1
+    encoding %= 4
+    T = encoding // 2 == 1
+    encoding %= 2
+    C = encoding == 1
+    return (P, T, C)
+
 # rewards:
 # -1 for each time step
 # +30 for encircling platypus (if not collided with animal)
 # +30 for encircling turtle   (if not collided with animal)
 # +30 for staying > 10m away from crocodile (at the end of the episode)
-
-def reward(usv_state: State, game_state: GameState):
+def pseudo_vrx_score(x, y, ae, time, game_state: GameState):
     reward = 0
-    reward -= usv_state.time
+    reward -= time
+    print (time)
+
+    P, T, C = get_animal_decoding(ae)
     
-    if usv_state.P:
+    if P:
         reward += 30
-    if usv_state.T:
+        print ("bonus P")
+    if T:
         reward += 30
+        print ("bonus T")
     
-    time_exceeded = usv_state.time >= game_state.time_limit
-    game_over = (usv_state.P and usv_state.T) or time_exceeded
+    time_exceeded = time >= game_state.time_limit
+    game_over = (P and T) or time_exceeded
     
-    if game_over and usv_state.C:
-            reward += 30
+    if game_over and C:
+        reward += 30
+        print ("bonus C")
     
     return reward
+
+def score_solution(actions, game_state: GameState):
+    total_time = 0
+    P, T, C = False, False, True
+    x, y = game_state.start_pos
+    for a in actions:
+        if a == Action.F:
+            y += game_state.grid_length
+            total_time += game_state.move_time
+        elif a == Action.B:
+            y -= game_state.grid_length
+            total_time += game_state.move_time
+        elif a == Action.R:
+            x += game_state.grid_length
+            total_time += game_state.move_time
+        elif a == Action.L:
+            x -= game_state.grid_length
+            total_time += game_state.move_time
+        elif a == Action.Encircle:
+            continue
+        else:
+            # encircle
+            cx, cy = a
+            twopir = 2 * math.pi * math.sqrt((x - cx)**2 + (y - cy)**2)
+            total_time += twopir * game_state.circle_time
+            if (cx, cy) == game_state.P:
+                P = True
+            elif (cx, cy) == game_state.T:
+                T = True
+
+        dist_to_croc = math.sqrt((x - game_state.C[0])**2 + (y - game_state.C[1])**2)
+        if dist_to_croc < 10:
+            C = False
+    
+    return pseudo_vrx_score(x, y, get_animal_encoding(P, T, C), total_time, game_state)
 
 # coord convention:
 #  y
@@ -245,6 +299,7 @@ def main():
                 action_history.append(game_state.T)
 
     print(f"Total time taken: {curr_state.time}")
+    print(score_solution(action_history, game_state))
     visualise_game_state(game_state, action_history)
     
 

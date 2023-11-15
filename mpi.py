@@ -49,67 +49,24 @@ class State:
 # +30 for encircling platypus (if not collided with animal)
 # +30 for encircling turtle   (if not collided with animal)
 # +30 for staying > 10m away from crocodile (at the end of the episode)
-def pseudo_vrx_score(x, y, ae, time, game_state: GameState):
-    reward = 0
-    print (time)
 
+def pseudo_vrx_score(x, y, ae, game_state: GameState):
+    reward = 0
+    reward -= game_state.time
     P, T, C = get_animal_decoding(ae)
     
     if P:
         reward += 30
-        print ("bonus P")
     if T:
         reward += 30
-        print ("bonus T")
     
-    time_exceeded = time >= game_state.time_limit
+    time_exceeded = (x + y) >= game_state.time_limit
     game_over = (P and T) or time_exceeded
     
     if game_over and C:
         reward += 30
-        print ("bonus C")
-
-    if not game_over:
-        reward -= 100
-    else:
-        reward -= time
     
     return reward
-
-def score_solution(actions, game_state: GameState):
-    total_time = 0
-    P, T, C = False, False, True
-    x, y = game_state.start_pos
-    for a in actions:
-        if a == Action.F:
-            y += game_state.grid_length
-            total_time += game_state.move_time
-        elif a == Action.B:
-            y -= game_state.grid_length
-            total_time += game_state.move_time
-        elif a == Action.R:
-            x += game_state.grid_length
-            total_time += game_state.move_time
-        elif a == Action.L:
-            x -= game_state.grid_length
-            total_time += game_state.move_time
-        elif a == Action.Encircle:
-            continue
-        else:
-            # encircle
-            cx, cy = a
-            twopir = 2 * math.pi * math.sqrt((x - cx)**2 + (y - cy)**2)
-            total_time += twopir * game_state.circle_time
-            if (cx, cy) == game_state.P:
-                P = True
-            elif (cx, cy) == game_state.T:
-                T = True
-
-        dist_to_croc = math.sqrt((x - game_state.C[0])**2 + (y - game_state.C[1])**2)
-        if dist_to_croc < 10:
-            C = False
-    
-    return pseudo_vrx_score(x, y, get_animal_encoding(P, T, C), total_time, game_state)
 
 # coord convention:
 #  y
@@ -216,7 +173,7 @@ def reward(x, y, ae, a, gs: GameState):
     new_P, new_T, new_C = get_animal_decoding(new_ae)
 
     if action == Action.F or action == Action.B or action == Action.R or action == Action.L:
-        delta_reward -= gs.move_time * 0.2
+        delta_reward -= gs.move_time * 0.8
     else: 
         # action is encircle
         twopir = 2 * math.pi * math.sqrt((x - pc[0])**2 + (y - pc[1])**2)
@@ -270,21 +227,21 @@ def available_actions(x, y, game_state: GameState, lb, rb, bb, tb):
         actions.append((Action.Encircle, game_state.T, Direction.CW))
         actions.append((Action.Encircle, game_state.T, Direction.CCW))
     
-    return actions        
+    return actions
 
 def main():
     game_state = GameState(
         start_pos = (0, 0),
         usv_dims = (1, 1),
         # case 1
-        P = (0, 10),
-        T = (10, 0),
-        C = (15, 15),
+        # P = (0, 10),
+        # T = (10, 0),
+        # C = (15, 15),
 
         # case 2
-        # P = (0, 30),
-        # T = (15, 15),
-        # C = (0, 15),
+        P = (0, 30),
+        T = (15, 15),
+        C = (0, 15),
 
         # case 3
         # P = (39, 39),
@@ -300,7 +257,6 @@ def main():
         # P = (-7, 15),
         # T = (7, 15),
         # C = (0, 15),
-
         grid_length = 1,
         time_limit = 100,
         move_time = 1,
@@ -342,27 +298,58 @@ def main():
     max_iter = 10000
     gamma = 1
 
-    # value iteration
+    # Initialize a random policy
+    policy = np.zeros((WIDTH, HEIGHT, 8), dtype=int)
+
+    max_iter = 10000
+    gamma = 1
+    k = 10  # Number of value iteration steps in policy evaluation
+
+    # Modified policy iteration
     for i in range(max_iter):
-        delta = 0
+        # Policy evaluation
+        for _ in range(k):
+            delta = 0
+            for x in range(left_bound, right_bound + 1, game_state.grid_length):
+                for y in range(bottom_bound, top_bound + 1, game_state.grid_length):
+                    for s in range(8):
+                        a = policy[idx(x)][idy(y)][s]
+                        actions = pre_actions[x, y]
+                        if len(actions) == 0:
+                            continue
+                        delta_reward, new_state = reward(x, y, s, actions[a], game_state)
+                        new_v = delta_reward + gamma * value_policy[idx(new_state[0])][idy(new_state[1])][new_state[2]]
+                        delta = max(delta, abs(new_v - value_policy[idx(x)][idy(y)][s]))
+                        value_policy[idx(x)][idy(y)][s] = new_v
+            if delta < 0.01:
+                break
+        
+        print (i, delta)
+
+        # Policy improvement
+        policy_stable = True
         for x in range(left_bound, right_bound + 1, game_state.grid_length):
             for y in range(bottom_bound, top_bound + 1, game_state.grid_length):
                 for s in range(8):
-                    new_v = -10 # value_policy[idx(x)][idy(y)][s]
                     actions = pre_actions[x, y]
-
-                    P, T, _ = get_animal_decoding(s)
-                    if P and T:
+                    if len(actions) == 0:
                         continue
 
+                    action_idx = policy[idx(x)][idy(y)][s]
+                    old_action = actions[action_idx]
+                    best_action_value = -np.inf
+                    best_action = None
                     for a in actions:
                         delta_reward, new_state = reward(x, y, s, a, game_state)
-                        new_v = max(new_v, delta_reward + gamma * value_policy[idx(new_state[0])][idy(new_state[1])][new_state[2]])
-    
-                    delta = max(delta, abs(new_v - value_policy[idx(x)][idy(y)][s]))
-                    value_policy[idx(x)][idy(y)][s] = new_v
-        print (i, delta)
-        if delta < 0.01:
+                        action_value = delta_reward + gamma * value_policy[idx(new_state[0])][idy(new_state[1])][new_state[2]]
+                        if action_value > best_action_value:
+                            best_action_value = action_value
+                            best_action = a
+                    policy[idx(x)][idy(y)][s] = actions.index(best_action)
+                    if old_action != best_action:
+                        policy_stable = False
+
+        if policy_stable:
             break
 
     #####################
@@ -424,7 +411,6 @@ def main():
     print ()
 
     print (actions)
-    print (score_solution(actions, game_state))
     visualise_game_state(game_state, actions)
 
 if __name__ == "__main__":
